@@ -74,14 +74,17 @@ def build_generator(num_signals):
 
 
 '''
-    Trimming Data to have 1 -> 1 pair matching between desired domains based on associated speed of signals 
+    Point this to your untrimmed norm stacks pkl file
 '''
-# Grouped by speeds. Trimmed to match.
 with open('/Users/aarnavsawant/Documents/EPICLab/GANProject/grouped_norm_stacks_untrimmed.pkl', 'rb') as f:
     grouped_norm_stacks = pickle.load(f)
+
+
+'''
+    Trimming Data to have 1 -> 1 pair matching between desired domains based on associated speed of signals 
+'''
 trimmed_norm_stacks = copy.deepcopy(grouped_norm_stacks)
-min_sizes = {'0.3': float('inf'), '0.4': float('inf'), '0.5': float('inf'), '0.6': float('inf'), '0.7': float('inf'), '0.8': float('inf'), '0.9' : float('inf')}
-    
+min_sizes = {'0.3': float('inf'), '0.4': float('inf'), '0.5': float('inf'), '0.6': float('inf'), '0.7': float('inf'), '0.8': float('inf'), '0.9' : float('inf')}    
 for device, speed_levels in grouped_norm_stacks.items():
     for speed, array in speed_levels.items():
         if speed in min_sizes.keys():
@@ -101,13 +104,19 @@ for device, speed_levels in grouped_norm_stacks.items():
 
 
 '''
- Main Training Loop    
+ Helper functions to get particular data we want   
 '''
 real_device = 'PK' #Device we want to generate signal of
 noise_device = 'OSL' #Device we want to use to generate signal
 
 
 def get_all_data(device):
+    '''
+       Returns the untrimmed version of all the data for a particular device
+       We use this particularly when generating all the synthetic signals aftert training the 
+       generator
+       (e.g. after training our generators, we use this to gather all the OSL data) 
+    '''
     strides = []
     speeds = []
     for speed in grouped_norm_stacks[device]:
@@ -120,6 +129,10 @@ def get_all_data(device):
 
 
 def get_real_and_noise_signals(real_device, noise_device, shuffle=False):
+    '''
+        Returns 1-1 pairings for our training and test sets for our generator training
+        Uses the trimmed norm stacks to achieve this
+    '''
     real_train = []
     real_train_labels = []
     noise_train = []
@@ -178,16 +191,23 @@ def get_real_and_noise_signals(real_device, noise_device, shuffle=False):
     return real_train, noise_train, real_train_labels, real_test, noise_test
 
 
+'''
+    Main Training Loop
+'''
+SHOULD_ENABLE_TRAINING = False
+
+#Get the training and test data for generator training
+#In this case, labels refers to the corresponding speeds for the PK data
 real_train, noise_train, real_train_labels, real_test, noise_test = get_real_and_noise_signals(real_device=real_device, noise_device=noise_device, shuffle=True)
-print("Real Train Shape: ", real_train.shape)
-print("Noise Train Shape: ", noise_train.shape)
 
 
+#Get all the noise data for generating all synthetic signals
 all_noise_data, all_noise_speeds = get_all_data(noise_device)
 
 epochs = 51 # Number of epochs for training
 batch_size = 32
 num_batches = int(real_train.shape[0] / batch_size)  # Calculate the number of batches per epoch
+#Signal Groupings
 signals = [['knee_theta', 'knee_thetadot', 'forceZ'],
             ['shank_accelX', 'shank_accelY', 'shank_accelZ'], 
             ['shank_gyroX', 'shank_gyroY', 'shank_gyroZ'], 
@@ -195,35 +215,46 @@ signals = [['knee_theta', 'knee_thetadot', 'forceZ'],
             ['thigh_gyroX', 'thigh_gyroY', 'thigh_gyroZ'],
             ]
 models = []
-for i in range(len(signals)):
-    generator = build_generator(len(signals[i]))
-    generator.compile(loss='mean_absolute_error', optimizer=tf.keras.optimizers.legacy.Adam(0.0001))
-    for epoch in range(epochs):
-        real_train, noise_train, real_train_labels, _, _ = get_real_and_noise_signals(real_device=real_device, noise_device=noise_device)
-        for batch in range(num_batches):
-            start_idx = batch * batch_size
-            end_idx = start_idx + batch_size
 
-            real_samples = real_train[start_idx:end_idx,:,i * 3 : i * 3 + 3]
-            noise_samples = noise_train[start_idx:end_idx, :,i * 3 : i * 3 + 3]
-            generated_samples = generator.predict(noise_samples)
-        
-            # Train the generator on noise samples
-            g_loss = generator.train_on_batch(noise_samples, real_samples)
-        
-        # Optionally, log losses or save models
-        print(f"Epoch {epoch+1}/{epochs}, Generator Loss: {g_loss}")
+if (SHOULD_ENABLE_TRAINING):
+    for i in range(len(signals)):
+        generator = build_generator(len(signals[i]))
+        generator.compile(loss='mean_absolute_error', optimizer=tf.keras.optimizers.legacy.Adam(0.0001))
+        for epoch in range(epochs):
+            real_train, noise_train, real_train_labels, _, _ = get_real_and_noise_signals(real_device=real_device, noise_device=noise_device)
+            for batch in range(num_batches):
+                start_idx = batch * batch_size
+                end_idx = start_idx + batch_size
 
-        
-        # Optionally, log losses or save models
-        if (epoch) % 50 == 0:
-            plot_stacks({'Generated':generated_samples, real_device:real_samples, noise_device:noise_samples}, signals[i], epoch=epoch + 1)
-            generate_signal_mae_tables(real_samples, generated_samples, i + 1, signals[i],  "Training", epoch + 1)
+                real_samples = real_train[start_idx:end_idx,:,i * 3 : i * 3 + 3]
+                noise_samples = noise_train[start_idx:end_idx, :,i * 3 : i * 3 + 3]
+                generated_samples = generator.predict(noise_samples)
+            
+                # Train the generator on noise samples
+                g_loss = generator.train_on_batch(noise_samples, real_samples)
+            
+            # Optionally, log losses or save models
+            print(f"Epoch {epoch+1}/{epochs}, Generator Loss: {g_loss}")
 
-    generator.save('osl_to_pk_group%d.h5' % i)
-    models.append(generator)
+            
+            # Optionally, log losses or save models
+            if (epoch) % 50 == 0:
+                plot_stacks({'Generated':generated_samples, real_device:real_samples, noise_device:noise_samples}, signals[i], epoch=epoch + 1)
+                generate_signal_mae_tables(real_samples, generated_samples, i + 1, signals[i],  "Training", epoch + 1)
+
+        generator.save('osl_to_pk_group%d.h5' % i)
+        models.append(generator)
+else:
+    '''
+        Loading our Models
+    '''
+    for i in range(len(signals)):
+        models.append(load_model('osl_to_pk_group%d.h5' % i))
 
 
+'''
+    Testing our generators on our test set
+'''
 results = {} 
 all_gen= []
 all_real = []
@@ -256,6 +287,9 @@ generate_signal_mae_tables_all_signals(all_real, all_gen, signals, "Testing")
 results[speed].append((fullNoiseSignal, fullGenSignal, fullRealSignal))
 
 
+'''
+    Passing all our noise data through the generators to get our synthetic signals
+'''
 synthetic_signals = {'data' : [], 'labels' : []}
 for i in range(all_noise_data.shape[0]):
     full_gen_signal = []
@@ -270,8 +304,13 @@ for i in range(all_noise_data.shape[0]):
 print("Generated Synthetic Signals...")
 synthetic_signals['data'] = np.concatenate(synthetic_signals['data'], axis=0)
 print(synthetic_signals['data'].shape)
-with open('synthetic_signals.pkl', 'wb') as f:
-    pickle.dump(synthetic_signals, f)
+
+
+'''
+    Uncomment to write the synthetic_signals pkl file
+'''
+# with open('synthetic_signals.pkl', 'wb') as f:
+#     pickle.dump(synthetic_signals, f)
         
         
 plot_stacks({'Generated':fullGenSignal, 'PK':fullRealSignal,'OSL':fullNoiseSignal}, ['knee_theta', 'knee_thetadot', 'forceZ',
@@ -280,6 +319,11 @@ plot_stacks({'Generated':fullGenSignal, 'PK':fullRealSignal,'OSL':fullNoiseSigna
             'thigh_accelX','thigh_accelY', 'thigh_accelZ', 
             'thigh_gyroX', 'thigh_gyroY', 'thigh_gyroZ',
             ], plot_all_strides=True)
+
+
+'''
+    Uncomment to enable more detailed plotting
+'''
 # import matplotlib.pyplot as plt
 # plt.figure(figsize=(10, 6))
 
